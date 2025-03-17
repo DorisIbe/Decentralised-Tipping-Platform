@@ -181,7 +181,6 @@
 )
 
 
-
 (define-private (log-transaction (sender principal) (recipient principal) (amount uint) (fee uint) (token-type (string-ascii 32)))
   (map-set tip-history 
     { 
@@ -241,3 +240,98 @@
         ;; (not (is-eq user tx-sender))
     )
 )
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;; Public ;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Main Tip Function
+(define-public (tip 
+    (recipient principal) 
+    (amount uint)
+    (token-type (string-ascii 3))
+)
+  (begin
+          ;; Add recipient validation
+          (asserts! (is-valid-recipient recipient) (err ERR_INVALID_RECIPIENT))
+          (asserts! (is-valid-token-type token-type) (err ERR_INVALID_TOKEN_TYPE))
+
+    (let 
+      (
+        (platform-fee (calculate-platform-fee amount))
+        (tip-amount (calculate-tip-amount amount platform-fee))
+      )
+      ;; Safety Checks
+      (asserts! (check-tip-amount amount) (err ERR_INVALID_AMOUNT))
+      
+      ;; Token Transfer Logic
+      (try! (transfer-tip recipient tip-amount))
+      (try! (transfer-platform-fee platform-fee))
+
+      ;; Update Stats
+      (update-sender-stats tx-sender amount)
+      (update-recipient-stats recipient amount)
+      
+      ;; Log Transaction
+      (log-transaction tx-sender recipient tip-amount platform-fee token-type)
+      
+      ;; Reward System
+      (update-reward-points tx-sender amount)
+      
+      (ok true)
+    )
+  ))
+
+(define-public (update-user-reward-points (user principal) (reward-rate uint))
+    (begin
+        ;; Ensure only the contract owner can update reward points
+        (asserts! (is-eq tx-sender CONTRACT_OWNER) (err ERR_UNAUTHORIZED))
+        
+        ;; Validate the user principal
+        (asserts! (is-valid-user user) (err ERR_INVALID_USER))
+        
+        ;; Add a reasonable upper limit for reward rate
+        (asserts! (< reward-rate MAX_REWARD_RATE) (err ERR_INVALID_REWARD_RATE))
+        
+        (match (map-get? user-tip-stats user)
+            current-stats 
+            (begin
+                (map-set user-tip-stats user 
+                    (merge current-stats {
+                        reward-points: (+ (get reward-points current-stats) reward-rate)
+                    })
+                )
+                (ok true)
+            )
+            (err ERR_REWARD_UPDATE_FAILED)
+        )
+    )
+)
+
+(define-public (set-user-identity (user principal) (username (string-ascii 50)))
+    (begin
+        ;; Ensure username is not empty
+        (asserts! (> (len username) u0) (err ERR_INVALID_USERNAME))
+        
+        ;; Ensure username is not too short or too long
+        (asserts! (and (>= (len username) u3) (<= (len username) u20)) (err ERR_INVALID_USERNAME_LENGTH))
+        
+        ;; Check if username is already taken
+        (asserts! (is-none (map-get? username-registry username)) (err ERR_USERNAME_TAKEN))
+        
+        ;; Optional: Add verification that the user is setting their own identity
+        (asserts! (is-eq user tx-sender) (err ERR_UNAUTHORIZED))
+        
+        ;; Register the username
+        (map-set username-registry username true)
+        
+        ;; Set user identity
+        (map-set user-identity user {
+            username: username,
+            verified: true
+        })
+        
+        (ok true)
+    )
+)
+
